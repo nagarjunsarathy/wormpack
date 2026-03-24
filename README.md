@@ -18,3 +18,6 @@ mkfile main.py
 
 6. To run app
 * uvicorn main:app --reload --port 8000
+
+7. Test from
+http://localhost:8000/docs#/default/chat_api_chat_post
