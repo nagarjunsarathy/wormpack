@@ -10,11 +10,11 @@
 4. Created .env file to add API key
 touch .env
 <ADD API keys>
-echo ".env" >> .gitignore
-echo "wp-env/" >> .gitignore
+* echo ".env" >> .gitignore
+* echo "wp-env/" >> .gitignore
 
 5. Create main file
 mkfile main.py
 
 6. To run app
-uvicorn main:app --reload --port 8000
+* uvicorn main:app --reload --port 8000
