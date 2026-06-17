@@ -1,4 +1,4 @@
-# Wormpack 🪱
+# Wormpack
 
 **WormPack** is an AI-powered adaptive, mastery-based tutoring platform for data engineers. It teaches concepts in **Apache Spark, SQL, Data Engineering, and Python** through a continuous **Teach → Question → Evaluate → Remediate/Advance** loop, adapting difficulty in real time based on the learner's responses.
 
