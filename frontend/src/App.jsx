@@ -1,397 +1,560 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from 'react'
+import { useAuth } from './AuthContext'
+import Login from './Login'
 
-// ─── API CALL — routes through FastAPI backend (OpenAI key stays secure in .env)
-const callClaude = async (messages) => {
-  const response = await fetch("http://localhost:8000/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-  });
-  const data = await response.json();
-  const text = data.content || "";
-  try {
-    const clean = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(clean);
-  } catch {
-    return {
-      type: "redirect",
-      message: "Let's keep our focus on Spark performance tuning.",
-      question: "What do you already know about Apache Spark, even if it's just a little?"
-    };
-  }
-};
+const API_BASE = 'http://localhost:8000'
 
-// ─── UTILS ────────────────────────────────────────────────────────────────────
-const scoreColor = (score) => {
-  if (score >= 8) return "#4ade80";
-  if (score >= 5) return "#facc15";
-  return "#f87171";
-};
+// ── Design tokens — dark greyscale (Apple/Perplexity inspired) ───────────────
+const C = {
+  bg:          '#0f0f10',   // page
+  bgSurface:   '#18181a',   // cards
+  bgMuted:     '#202022',   // hover surfaces
+  text:        '#ededed',   // primary text
+  textMuted:   '#aaaaaa',   // secondary text
+  textFaint:   '#858585',   // hints
+  border:      'rgba(255,255,255,0.07)',
+  borderMid:   '#262626',
+  borderStrong:'#3a3a3a',
+  accent:      '#d6d6d6',   // light silver accent
+  accentBright:'#e8e8e8',
+  accentDim:   'rgba(255,255,255,0.05)',
+  // muted mastery colors
+  blue:        '#6b9bb5',
+  blueBg:      'rgba(107,155,181,0.14)',
+  blueBorder:  '#6b9bb5',
+  green:       '#4e9a6b',
+  greenBg:     'rgba(78,154,107,0.16)',
+  amber:       '#bf8b3e',
+  amberBg:     'rgba(191,139,62,0.16)',
+  red:         '#b5564f',
+  redBg:       'rgba(181,86,79,0.16)',
+  purple:      '#8a7fc7',
+  purpleBg:    'rgba(138,127,199,0.16)',
+}
 
-const masteryColors = {
-  beginner:   { bg: "#1e293b", text: "#94a3b8", label: "Beginner" },
-  developing: { bg: "#1c2a3a", text: "#60a5fa", label: "Developing" },
-  proficient: { bg: "#1a2e1a", text: "#4ade80", label: "Proficient" },
-  mastery:    { bg: "#2a1a0e", text: "#fb923c", label: "Mastery ✦" },
-};
+const TOPICS = [
+  { key: 'spark',            label: 'Apache Spark',    icon: '⚡', desc: 'Performance Tuning' },
+  { key: 'sql',              label: 'SQL',              icon: '🗄️', desc: 'Optimization' },
+  { key: 'data_engineering', label: 'Data Engineering', icon: '🔧', desc: 'Fundamentals' },
+  { key: 'python',           label: 'Python',           icon: '🐍', desc: 'For Data Engineering' },
+]
 
-// ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
-const ScoreRing = ({ score }) => {
-  const r = 20, circ = 2 * Math.PI * r, filled = (score / 10) * circ;
+const EXAMPLES = {
+  spark:            ['What is Apache Spark?', 'Explain DAGs in Spark', 'What causes a shuffle?'],
+  sql:              ['How does a query planner work?', 'When should I use an index?', 'Explain window functions'],
+  data_engineering: ['What is ETL vs ELT?', 'Explain a data lakehouse', 'What is CDC?'],
+  python:           ['How do I read a Parquet file?', 'Explain pandas DataFrames', 'What is async in Python?'],
+}
+
+const MASTERY = {
+  beginner:   { color: C.red,    bg: C.redBg,    bar: 15,  label: 'Beginner'   },
+  developing: { color: C.amber,  bg: C.amberBg,  bar: 42,  label: 'Developing' },
+  proficient: { color: C.green,  bg: C.greenBg,  bar: 72,  label: 'Proficient' },
+  mastery:    { color: C.purple, bg: C.purpleBg, bar: 100, label: 'Mastery'    },
+}
+
+function scoreColor(s) {
+  if (s >= 7) return C.green
+  if (s >= 5) return C.amber
+  return C.red
+}
+
+// ── Pointer Text Renderer ─────────────────────────────────────────────────────
+// Splits pointer text so each • renders on its own line. Handles real newlines
+// and the model occasionally separating bullets with just a space.
+function PointerText({ text, style = {} }) {
+  if (!text) return null
+  const lines = text.split(/\n| (?=[•·])/).map(l => l.trim()).filter(l => l)
   return (
-    <svg width="56" height="56" style={{ transform: "rotate(-90deg)", flexShrink: 0 }}>
-      <circle cx="28" cy="28" r={r} fill="none" stroke="#1e293b" strokeWidth="4" />
-      <circle cx="28" cy="28" r={r} fill="none" stroke={scoreColor(score)} strokeWidth="4"
-        strokeDasharray={`${filled} ${circ - filled}`} strokeLinecap="round"
-        style={{ transition: "stroke-dasharray 0.8s ease" }} />
-      <text x="28" y="28" textAnchor="middle" dominantBaseline="central"
-        style={{ transform: "rotate(90deg) translate(0,-56px)", fill: scoreColor(score), fontSize: "13px", fontWeight: "700", fontFamily: "monospace" }}>
-        {score}/10
+    <div style={style}>
+      {lines.map((line, i) => {
+        const isExample = line.startsWith('Example:')
+        const isBullet  = line.startsWith('•') || line.startsWith('·')
+        const isHeading = !isBullet && !isExample && line.endsWith(':')
+        return (
+          <p key={i} style={{
+            margin: '0 0 6px',
+            fontSize: '14px',
+            lineHeight: 1.65,
+            color: isExample ? C.textMuted : C.text,
+            fontStyle: isExample ? 'italic' : 'normal',
+            fontWeight: isHeading ? 600 : 400,
+          }}>
+            {line}
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Score Ring ────────────────────────────────────────────────────────────────
+function ScoreRing({ score }) {
+  const r = 22
+  const circ = 2 * Math.PI * r
+  const col = scoreColor(score)
+  const fill = (score / 10) * circ
+  return (
+    <svg width="56" height="56" viewBox="0 0 56 56" style={{ flexShrink: 0 }}>
+      <circle cx="28" cy="28" r={r} fill="none" stroke={C.borderMid} strokeWidth="4" />
+      <circle cx="28" cy="28" r={r} fill="none" stroke={col} strokeWidth="4"
+        strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
+        transform="rotate(-90 28 28)"
+        style={{ transition: 'stroke-dasharray 0.5s ease' }} />
+      <text x="28" y="33" textAnchor="middle" fontSize="14" fontWeight="600" fill={col}>
+        {score}
       </text>
     </svg>
-  );
-};
+  )
+}
 
-const WelcomeCard = () => (
-  <div style={{
-    background: "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)",
-    border: "1px solid #312e81", borderRadius: "16px", padding: "28px", marginBottom: "8px",
-    position: "relative", overflow: "hidden",
-  }}>
-    <div style={{
-      position: "absolute", top: "-20px", right: "-20px", width: "160px", height: "160px",
-      background: "radial-gradient(circle, rgba(99,102,241,0.2) 0%, transparent 70%)", pointerEvents: "none",
-    }} />
-    <div style={{ fontSize: "32px", marginBottom: "14px" }}>👋</div>
-    <h2 style={{ color: "#c7d2fe", fontSize: "18px", fontWeight: "800", margin: "0 0 10px", letterSpacing: "0.5px" }}>
-      Welcome to MasteryMind
-    </h2>
-    <p style={{ color: "#94a3b8", fontSize: "14px", lineHeight: "1.8", margin: "0 0 20px" }}>
-      I'm your Spark performance tuning tutor. Instead of me lecturing you,{" "}
-      <strong style={{ color: "#e2e8f0" }}>you drive the learning</strong> — ask me anything about Spark
-      and I'll teach it, then quiz you to build real understanding.
-    </p>
-    <div style={{
-      background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)",
-      borderRadius: "10px", padding: "14px 16px",
-    }}>
-      <div style={{ fontSize: "10px", color: "#6366f1", fontWeight: "700", letterSpacing: "1.5px", marginBottom: "10px" }}>
-        💡 TRY ASKING
-      </div>
-      {[
-        "What is Apache Spark?",
-        "How does Spark decide how to run a job?",
-        "What is a shuffle and why is it slow?",
-      ].map((q, i) => (
-        <div key={i} style={{ color: "#a5b4fc", fontSize: "13px", marginBottom: i < 2 ? "6px" : "0", fontStyle: "italic" }}>
-          "{q}"
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const TeachCard = ({ data }) => (
-  <div style={{
-    background: "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)",
-    border: "1px solid #312e81", borderRadius: "16px", padding: "24px", marginBottom: "8px",
-    position: "relative", overflow: "hidden",
-  }}>
-    <div style={{
-      position: "absolute", top: 0, right: 0, width: "120px", height: "120px",
-      background: "radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%)", pointerEvents: "none",
-    }} />
-    <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "14px" }}>
-      <span style={{ fontSize: "16px" }}>⚡</span>
-      <span style={{ fontSize: "11px", fontWeight: "700", letterSpacing: "2px", color: "#818cf8", textTransform: "uppercase" }}>
-        {data.concept}
-      </span>
-    </div>
-    <p style={{ color: "#e2e8f0", fontSize: "15px", lineHeight: "1.75", margin: "0 0 20px", fontFamily: "'Georgia', serif" }}>
-      {data.explanation}
-    </p>
-    <div style={{ background: "rgba(99,102,241,0.1)", borderLeft: "3px solid #6366f1", padding: "14px 16px", borderRadius: "0 8px 8px 0" }}>
-      <div style={{ fontSize: "10px", color: "#6366f1", fontWeight: "700", letterSpacing: "1.5px", marginBottom: "6px" }}>
-        CHECK YOUR UNDERSTANDING
-      </div>
-      <p style={{ color: "#c7d2fe", margin: 0, fontSize: "15px", fontWeight: "500" }}>{data.question}</p>
-    </div>
-  </div>
-);
-
-const RemediationCard = ({ questions }) => (
-  <div style={{
-    background: "rgba(251,191,36,0.04)", border: "1px solid rgba(251,191,36,0.2)",
-    borderRadius: "16px", padding: "20px", marginBottom: "8px",
-  }}>
-    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
-      <span style={{ fontSize: "16px" }}>🔁</span>
-      <span style={{ fontSize: "11px", fontWeight: "700", color: "#fbbf24", letterSpacing: "1.5px" }}>
-        LET'S BUILD THE FOUNDATION FIRST
-      </span>
-    </div>
-    <p style={{ color: "#94a3b8", fontSize: "13px", marginBottom: "14px", lineHeight: "1.6" }}>
-      No worries — let's back up and make sure the basics are solid. Work through these 3 questions one by one:
-    </p>
-    {questions.map((q, i) => (
-      <div key={i} style={{
-        background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.15)",
-        borderRadius: "8px", padding: "12px 14px", marginBottom: "8px",
-        display: "flex", gap: "10px", alignItems: "flex-start",
-      }}>
-        <span style={{ color: "#fbbf24", fontWeight: "800", fontSize: "13px", flexShrink: 0 }}>{i + 1}.</span>
-        <span style={{ color: "#fde68a", fontSize: "14px", lineHeight: "1.6" }}>{q}</span>
-      </div>
-    ))}
-  </div>
-);
-
-const EvalCard = ({ data }) => {
-  const m = masteryColors[data.mastery_level] || masteryColors.beginner;
+// ── Teach Card ────────────────────────────────────────────────────────────────
+function TeachCard({ data }) {
   return (
-    <div style={{
-      background: "#0f172a", border: `1px solid ${scoreColor(data.score)}33`,
-      borderRadius: "16px", padding: "24px", marginBottom: "8px",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-        <div>
-          <div style={{ fontSize: "18px", marginBottom: "6px" }}>
-            {data.correct ? "✅ Correct!" : "🔄 Not quite — let's refine this"}
-          </div>
-          <div style={{
-            display: "inline-flex", alignItems: "center", gap: "6px",
-            background: m.bg, border: `1px solid ${m.text}44`, padding: "3px 10px", borderRadius: "20px",
-          }}>
-            <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: m.text, display: "inline-block" }} />
-            <span style={{ fontSize: "11px", fontWeight: "700", color: m.text, letterSpacing: "1px" }}>{m.label}</span>
-          </div>
+    <div style={cardStyle}>
+      <p style={conceptLabelStyle}>{data.concept}</p>
+      <PointerText text={data.explanation} style={{ marginBottom: '1rem' }} />
+      {data.question && (
+        <div style={{
+          padding: '0.75rem 1rem', borderRadius: '0 8px 8px 0',
+          background: C.accentDim, borderLeft: `3px solid ${C.accent}`,
+        }}>
+          <p style={{ margin: 0, fontSize: '14px', color: C.text, lineHeight: 1.6 }}>
+            {data.question}
+          </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Eval Card ─────────────────────────────────────────────────────────────────
+function EvalCard({ data }) {
+  const m = MASTERY[data.mastery_level] ?? MASTERY.beginner
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.75rem' }}>
         <ScoreRing score={data.score} />
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+            <span style={{
+              fontSize: '11px', fontWeight: 600, padding: '2px 10px',
+              borderRadius: '999px', background: m.bg, color: m.color,
+            }}>{m.label}</span>
+            {data.correct && (
+              <span style={{ fontSize: '12px', color: C.green, fontWeight: 500 }}>✓ Correct</span>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: '13px', color: C.textMuted, lineHeight: 1.5 }}>
+            {data.encouragement}
+          </p>
+        </div>
       </div>
+
+      <div style={{ height: '4px', borderRadius: '4px', background: C.borderMid, marginBottom: '0.875rem', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', width: `${m.bar}%`, background: m.color,
+          borderRadius: '4px', transition: 'width 0.6s ease',
+        }} />
+      </div>
+
+      {data.corrected_explanation && (
+        <PointerText text={data.corrected_explanation} style={{ marginBottom: '0.75rem' }} />
+      )}
 
       {data.misconceptions?.length > 0 && (
-        <div style={{ marginBottom: "16px" }}>
-          <div style={{ fontSize: "10px", color: "#f87171", fontWeight: "700", letterSpacing: "1px", marginBottom: "8px" }}>
-            ⚠ MISCONCEPTIONS DETECTED
-          </div>
+        <div style={{ marginBottom: '0.75rem' }}>
           {data.misconceptions.map((mis, i) => (
-            <div key={i} style={{
-              background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)",
-              borderRadius: "8px", padding: "10px 14px", marginBottom: "6px", color: "#fca5a5", fontSize: "13px",
-            }}>• {mis}</div>
+            <p key={i} style={{
+              margin: '4px 0', fontSize: '13px', color: C.red,
+              paddingLeft: '0.75rem', borderLeft: `2px solid ${C.redBg}`,
+              lineHeight: 1.5,
+            }}>⚠ {mis}</p>
           ))}
         </div>
       )}
 
-      <div style={{
-        background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)",
-        borderRadius: "8px", padding: "14px", marginBottom: "14px",
-      }}>
-        <div style={{ fontSize: "10px", color: "#4ade80", fontWeight: "700", letterSpacing: "1.5px", marginBottom: "8px" }}>
-          CORRECTED UNDERSTANDING
-        </div>
-        <p style={{ color: "#bbf7d0", margin: 0, fontSize: "14px", lineHeight: "1.7" }}>{data.corrected_explanation}</p>
-      </div>
-
-      <div style={{ color: "#94a3b8", fontSize: "13px", fontStyle: "italic", marginBottom: "16px" }}>
-        {data.encouragement}
-      </div>
-
-      {!data.needs_remediation && (
-        <div style={{ background: "rgba(99,102,241,0.08)", borderLeft: "3px solid #6366f1", padding: "14px 16px", borderRadius: "0 8px 8px 0" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-            <div style={{ fontSize: "10px", color: "#6366f1", fontWeight: "700", letterSpacing: "1.5px" }}>NEXT QUESTION</div>
-            <span style={{
-              fontSize: "10px", padding: "2px 8px", borderRadius: "10px", fontWeight: "700", letterSpacing: "1px",
-              background: data.next_difficulty === "harder" ? "rgba(251,146,60,0.15)" : data.next_difficulty === "easier" ? "rgba(96,165,250,0.15)" : "rgba(148,163,184,0.15)",
-              color: data.next_difficulty === "harder" ? "#fb923c" : data.next_difficulty === "easier" ? "#60a5fa" : "#94a3b8",
-            }}>
-              {data.next_difficulty?.toUpperCase()}
-            </span>
-          </div>
-          <p style={{ color: "#c7d2fe", margin: 0, fontSize: "15px", fontWeight: "500" }}>{data.next_question}</p>
+      {data.needs_remediation && data.remediation_questions?.length > 0 && (
+        <div style={{ padding: '0.75rem', borderRadius: '8px', background: C.amberBg }}>
+          <p style={{ margin: '0 0 6px', fontSize: '12px', fontWeight: 600, color: C.amber }}>
+            Let's solidify the foundation first:
+          </p>
+          {data.remediation_questions.map((q, i) => (
+            <p key={i} style={{ margin: '3px 0', fontSize: '13px', color: C.textMuted }}>
+              {i + 1}. {q}
+            </p>
+          ))}
         </div>
       )}
     </div>
-  );
-};
+  )
+}
 
-const RedirectCard = ({ data }) => (
-  <div style={{
-    background: "rgba(148,163,184,0.04)", border: "1px solid rgba(148,163,184,0.15)",
-    borderRadius: "16px", padding: "20px", marginBottom: "8px",
-  }}>
-    <div style={{ color: "#94a3b8", fontSize: "14px", marginBottom: "14px" }}>🧭 {data.message}</div>
-    <div style={{ background: "rgba(99,102,241,0.08)", borderLeft: "3px solid #6366f1", padding: "14px 16px", borderRadius: "0 8px 8px 0" }}>
-      <div style={{ fontSize: "10px", color: "#6366f1", fontWeight: "700", letterSpacing: "1.5px", marginBottom: "6px" }}>LET'S START HERE</div>
-      <p style={{ color: "#c7d2fe", margin: 0, fontSize: "15px", fontWeight: "500" }}>{data.question}</p>
-    </div>
-  </div>
-);
-
-const UserBubble = ({ text }) => (
-  <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "8px" }}>
-    <div style={{
-      background: "linear-gradient(135deg, #4f46e5, #7c3aed)", color: "#fff",
-      borderRadius: "16px 16px 4px 16px", padding: "12px 18px",
-      maxWidth: "70%", fontSize: "14px", lineHeight: "1.6",
-    }}>{text}</div>
-  </div>
-);
-
-const TypingIndicator = () => (
-  <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "12px 0" }}>
-    {[0, 1, 2].map(i => (
-      <div key={i} style={{
-        width: "8px", height: "8px", borderRadius: "50%", background: "#4f46e5",
-        animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
-      }} />
-    ))}
-    <style>{`@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-8px)}}`}</style>
-  </div>
-);
-
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function AITutorMVP() {
-  const [messages, setMessages] = useState([]);
-  const [cards, setCards] = useState([{ id: 0, type: "welcome" }]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [sessionScore, setSessionScore] = useState({ total: 0, count: 0 });
-  const bottomRef = useRef(null);
-
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [cards, loading]);
-
-  const handleSend = async () => {
-    if (!input.trim() || loading) return;
-    const userText = input.trim();
-    setInput("");
-    if (!started) setStarted(true);
-
-    setCards(c => [...c, { id: Date.now(), type: "user", text: userText }]);
-    setLoading(true);
-
-    const newMessages = [...messages, { role: "user", content: userText }];
-    const resp = await callClaude(newMessages);
-    const updatedMessages = [...newMessages, { role: "assistant", content: JSON.stringify(resp) }];
-    setMessages(updatedMessages);
-
-    const newCards = [];
-
-    if (resp.type === "teach") {
-      newCards.push({ id: Date.now() + 1, type: "teach", data: resp });
-    } else if (resp.type === "evaluation") {
-      setSessionScore(s => ({ total: s.total + resp.score, count: s.count + 1 }));
-      newCards.push({ id: Date.now() + 1, type: "eval", data: resp });
-      if (resp.needs_remediation && resp.remediation_questions?.length > 0) {
-        newCards.push({ id: Date.now() + 2, type: "remediation", questions: resp.remediation_questions });
-      }
-    } else if (resp.type === "redirect") {
-      newCards.push({ id: Date.now() + 1, type: "redirect", data: resp });
-    } else {
-      // Catch-all — never block, always keep conversation alive
-      newCards.push({ id: Date.now() + 1, type: "redirect", data: {
-        message: "Let me redirect us back to Spark.",
-        question: "What aspect of Spark performance would you like to explore first?"
-      }});
-    }
-
-    setCards(c => [...c, ...newCards]);
-    setLoading(false);
-  };
-
-  const avgScore = sessionScore.count > 0 ? (sessionScore.total / sessionScore.count).toFixed(1) : "—";
-
-  return (
-    <div style={{ minHeight: "100vh", background: "#020617", fontFamily: "'IBM Plex Mono','Courier New',monospace", color: "#e2e8f0", display: "flex", flexDirection: "column" }}>
-
-      {/* HEADER */}
-      <div style={{
-        background: "rgba(15,23,42,0.97)", backdropFilter: "blur(12px)",
-        borderBottom: "1px solid #1e293b", padding: "14px 24px",
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        position: "sticky", top: 0, zIndex: 100,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <div style={{
-            width: "36px", height: "36px", borderRadius: "10px",
-            background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "16px", boxShadow: "0 0 18px rgba(99,102,241,0.4)",
-          }}>⚡</div>
-          <div>
-            <div style={{ fontWeight: "800", fontSize: "15px", letterSpacing: "1px", color: "#fff" }}>MasteryMind</div>
-            <div style={{ fontSize: "9px", color: "#6366f1", letterSpacing: "2px" }}>SPARK PERFORMANCE TUNING</div>
-          </div>
+// ── Message ───────────────────────────────────────────────────────────────────
+function Message({ msg }) {
+  if (msg.role === 'user') {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+        <div style={{
+          maxWidth: '76%', padding: '0.625rem 0.875rem',
+          background: C.bgMuted, border: `0.5px solid ${C.border}`,
+          borderRadius: '12px 12px 4px 12px',
+          fontSize: '14px', color: C.text, lineHeight: 1.6,
+        }}>
+          {msg.content}
         </div>
-        {sessionScore.count > 0 && (
-          <div style={{ display: "flex", gap: "20px" }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "17px", fontWeight: "800", color: scoreColor(parseFloat(avgScore)) }}>{avgScore}</div>
-              <div style={{ fontSize: "9px", color: "#64748b", letterSpacing: "1px" }}>AVG SCORE</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: "17px", fontWeight: "800", color: "#818cf8" }}>{sessionScore.count}</div>
-              <div style={{ fontSize: "9px", color: "#64748b", letterSpacing: "1px" }}>ANSWERED</div>
-            </div>
-          </div>
+      </div>
+    )
+  }
+
+  const { parsed } = msg
+  if (parsed?.type === 'teach')      return <TeachCard data={parsed} />
+  if (parsed?.type === 'evaluation') return <EvalCard data={parsed} />
+  if (parsed?.type === 'redirect') {
+    return (
+      <div style={cardStyle}>
+        <PointerText text={parsed.message} style={{ marginBottom: parsed.question ? '0.5rem' : 0 }} />
+        {parsed.question && (
+          <p style={{
+            margin: 0, fontSize: '14px', color: C.text, lineHeight: 1.6,
+            padding: '0.625rem 0.875rem', borderRadius: '0 8px 8px 0',
+            background: C.accentDim, borderLeft: `3px solid ${C.accent}`,
+          }}>{parsed.question}</p>
         )}
       </div>
+    )
+  }
+  return (
+    <div style={{ padding: '0.5rem 0', fontSize: '14px', color: C.textMuted }}>
+      {msg.content}
+    </div>
+  )
+}
 
-      {/* CHAT AREA */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "24px", maxWidth: "760px", margin: "0 auto", width: "100%" }}>
-        {cards.map(card => (
-          <div key={card.id}>
-            {card.type === "welcome"     && <WelcomeCard />}
-            {card.type === "teach"       && <TeachCard data={card.data} />}
-            {card.type === "eval"        && <EvalCard data={card.data} />}
-            {card.type === "remediation" && <RemediationCard questions={card.questions} />}
-            {card.type === "redirect"    && <RedirectCard data={card.data} />}
-            {card.type === "user"        && <UserBubble text={card.text} />}
-          </div>
+// ── Typing dots ───────────────────────────────────────────────────────────────
+function TypingDots() {
+  return (
+    <div style={{ display: 'flex', gap: '5px', padding: '0.75rem 0', alignItems: 'center' }}>
+      {[0, 1, 2].map(i => (
+        <div key={i} style={{
+          width: '7px', height: '7px', borderRadius: '50%',
+          background: C.textFaint,
+          animation: `wp-pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+        }} />
+      ))}
+    </div>
+  )
+}
+
+// ── Welcome screen ────────────────────────────────────────────────────────────
+function WelcomeScreen({ topic, onSend }) {
+  const t = TOPICS.find(x => x.key === topic)
+  const examples = EXAMPLES[topic] ?? []
+  return (
+    <div style={{ textAlign: 'center', padding: '2.5rem 0.5rem 1.5rem' }}>
+      <div style={{ fontSize: '52px', marginBottom: '0.75rem', lineHeight: 1 }}>{t?.icon}</div>
+      <h2 style={{ margin: '0 0 4px', fontSize: '20px', fontWeight: 600, color: C.text }}>{t?.label}</h2>
+      <p style={{ margin: '0 0 2rem', fontSize: '13px', color: C.textFaint }}>{t?.desc} · Adaptive mastery-based tutoring</p>
+      <div style={{ textAlign: 'left' }}>
+        <p style={{
+          fontSize: '11px', fontWeight: 600, color: C.textFaint,
+          letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.5rem',
+        }}>
+          Try asking
+        </p>
+        {examples.map(q => (
+          <button key={q} onClick={() => onSend(q)} style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            padding: '0.625rem 0.875rem', marginBottom: '6px',
+            background: C.bgSurface, border: `0.5px solid ${C.borderMid}`,
+            borderRadius: '8px', cursor: 'pointer',
+            fontSize: '14px', color: C.text, lineHeight: 1.5,
+            transition: 'background 0.12s',
+            fontFamily: 'inherit',
+          }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgMuted }}
+            onMouseLeave={e => { e.currentTarget.style.background = C.bgSurface }}
+          >
+            {q}
+          </button>
         ))}
-        {loading && <TypingIndicator />}
+      </div>
+    </div>
+  )
+}
+
+// ── Shared style objects ──────────────────────────────────────────────────────
+const cardStyle = {
+  background: C.bgSurface,
+  border: `0.5px solid ${C.borderMid}`,
+  borderRadius: '12px',
+  padding: '1rem 1.25rem',
+  marginBottom: '0.625rem',
+}
+
+const conceptLabelStyle = {
+  margin: '0 0 0.625rem',
+  fontSize: '11px', fontWeight: 600,
+  letterSpacing: '0.07em', textTransform: 'uppercase',
+  color: C.textFaint,
+}
+
+const ghostBtn = {
+  fontSize: '12px', color: C.textMuted,
+  background: 'none', border: 'none',
+  cursor: 'pointer', padding: '4px 8px',
+  fontFamily: 'inherit',
+}
+
+// ── Tutor (the authenticated app) ─────────────────────────────────────────────
+function Tutor() {
+  const { user, signOut } = useAuth()
+  const [topic, setTopic]       = useState('spark')
+  const [messages, setMessages] = useState([])
+  const [apiMsgs, setApiMsgs]   = useState([])
+  const [input, setInput]       = useState('')
+  const [loading, setLoading]   = useState(false)
+  const [started, setStarted]   = useState(false)
+  const bottomRef               = useRef(null)
+  const inputRef                = useRef(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading])
+
+  const resetSession = (newTopic) => {
+    setTopic(newTopic)
+    setMessages([])
+    setApiMsgs([])
+    setStarted(false)
+    setInput('')
+  }
+
+  const sendMessage = async (text) => {
+    const userText = (text ?? input).trim()
+    if (!userText || loading) return
+
+    setInput('')
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto'
+    }
+    setStarted(true)
+
+    const userApiMsg = { role: 'user', content: userText }
+    const nextApiMsgs = [...apiMsgs, userApiMsg]
+    setMessages(prev => [...prev, { role: 'user', content: userText }])
+    setApiMsgs(nextApiMsgs)
+    setLoading(true)
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: nextApiMsgs, topic }),
+      })
+      const data = await res.json()
+      const raw = data.content ?? data.error ?? 'Something went wrong.'
+
+      let parsed = null
+      try { parsed = JSON.parse(raw) } catch (_) { /* raw text fallback */ }
+
+      const assistantApiMsg = { role: 'assistant', content: raw }
+      setApiMsgs(prev => [...prev, assistantApiMsg])
+      setMessages(prev => [...prev, { role: 'assistant', content: raw, parsed }])
+    } catch (_) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: 'Could not reach localhost:8000 — is the FastAPI backend running?',
+      }])
+    } finally {
+      setLoading(false)
+      setTimeout(() => inputRef.current?.focus(), 60)
+    }
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage()
+    }
+  }
+
+  const canSend = input.trim().length > 0 && !loading
+  const currentTopic = TOPICS.find(t => t.key === topic)
+
+  const displayName =
+    user?.user_metadata?.full_name ||
+    user?.email?.split('@')[0] ||
+    'Account'
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      height: '100vh', maxWidth: '700px',
+      margin: '0 auto', padding: '0 1rem',
+      boxSizing: 'border-box',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      background: C.bg, color: C.text,
+    }}>
+
+      {/* Header */}
+      <header style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '0.875rem 0 0.75rem',
+        borderBottom: `0.5px solid ${C.border}`,
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+          <div style={{
+            width: '28px', height: '28px', borderRadius: '6px',
+            background: C.accentBright,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '13px', fontWeight: 700, color: C.bg,
+          }}>W</div>
+          <span style={{ fontWeight: 700, fontSize: '15px', color: C.text }}>Wormpack</span>
+          <span style={{
+            fontSize: '11px', color: C.textFaint,
+            borderLeft: `0.5px solid ${C.border}`, paddingLeft: '0.625rem',
+          }}>Adaptive Tutor</span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {started && (
+            <button onClick={() => resetSession(topic)} style={ghostBtn}>
+              New session
+            </button>
+          )}
+          <span style={{ fontSize: '12px', color: C.textMuted }}>{displayName}</span>
+          <button onClick={signOut} style={{
+            ...ghostBtn,
+            border: `0.5px solid ${C.borderMid}`,
+            borderRadius: '6px',
+          }}>
+            Log out
+          </button>
+        </div>
+      </header>
+
+      {/* Topic tabs */}
+      <div style={{
+        display: 'flex', gap: '4px',
+        padding: '0.625rem 0 0.375rem',
+        overflowX: 'auto', flexShrink: 0,
+      }}>
+        {TOPICS.map(t => {
+          const active = topic === t.key
+          return (
+            <button key={t.key} onClick={() => resetSession(t.key)} style={{
+              whiteSpace: 'nowrap', padding: '5px 13px',
+              borderRadius: '999px', fontSize: '13px',
+              cursor: 'pointer', fontFamily: 'inherit',
+              fontWeight: active ? 600 : 400,
+              border: active ? `1px solid ${C.accent}` : `0.5px solid ${C.borderMid}`,
+              background: active ? C.accentBright : 'transparent',
+              color: active ? C.bg : C.textMuted,
+              transition: 'all 0.12s',
+            }}>
+              {t.icon} {t.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Chat area */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem 0' }}>
+        {!started && <WelcomeScreen topic={topic} onSend={sendMessage} />}
+        {messages.map((msg, i) => <Message key={i} msg={msg} />)}
+        {loading && <TypingDots />}
         <div ref={bottomRef} />
       </div>
 
-      {/* INPUT BAR — always enabled */}
+      {/* Input bar */}
       <div style={{
-        background: "rgba(15,23,42,0.98)", borderTop: "1px solid #1e293b",
-        padding: "16px 24px", position: "sticky", bottom: 0,
+        padding: '0.625rem 0 1rem',
+        borderTop: `0.5px solid ${C.border}`,
+        flexShrink: 0,
       }}>
-        <div style={{ maxWidth: "760px", margin: "0 auto", display: "flex", gap: "12px" }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
           <textarea
+            ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-            placeholder={!started ? "Ask your first question about Spark…" : "Type your answer or ask a new question…"}
-            disabled={loading}
+            onKeyDown={onKeyDown}
+            onInput={e => {
+              e.target.style.height = 'auto'
+              e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
+            }}
+            placeholder={started
+              ? 'Answer the question or ask anything…'
+              : `Ask about ${currentTopic?.label}…`
+            }
             rows={1}
             style={{
-              flex: 1, background: "#0f172a", border: "1px solid #1e293b",
-              borderRadius: "12px", padding: "14px 16px", color: "#e2e8f0",
-              fontSize: "14px", resize: "none", fontFamily: "inherit",
-              outline: "none", minHeight: "52px", maxHeight: "120px",
-              transition: "border-color 0.2s",
+              flex: 1, resize: 'none', lineHeight: 1.55,
+              fontSize: '14px', padding: '0.625rem 0.875rem',
+              border: `0.5px solid ${C.borderMid}`,
+              borderRadius: '8px',
+              background: C.bgSurface, color: C.text,
+              outline: 'none',
+              fontFamily: 'inherit',
+              overflowY: 'hidden',
             }}
-            onFocus={e => e.target.style.borderColor = "#4f46e5"}
-            onBlur={e => e.target.style.borderColor = "#1e293b"}
+            onFocus={e => { e.target.style.borderColor = C.borderStrong }}
+            onBlur={e => { e.target.style.borderColor = C.borderMid }}
           />
           <button
-            onClick={handleSend}
-            disabled={loading || !input.trim()}
+            onClick={() => sendMessage()}
+            disabled={!canSend}
             style={{
-              background: loading || !input.trim() ? "#1e293b" : "linear-gradient(135deg, #4f46e5, #7c3aed)",
-              color: loading || !input.trim() ? "#475569" : "#fff",
-              border: "none", borderRadius: "12px", padding: "14px 22px",
-              fontSize: "14px", fontWeight: "700", letterSpacing: "0.5px",
-              cursor: loading || !input.trim() ? "not-allowed" : "pointer",
-              transition: "all 0.2s", whiteSpace: "nowrap",
+              padding: '0.625rem 1.125rem', borderRadius: '8px',
+              border: `0.5px solid ${canSend ? C.accent : C.borderMid}`,
+              background: canSend ? C.accentBright : 'transparent',
+              color: canSend ? C.bg : C.textFaint,
+              cursor: canSend ? 'pointer' : 'default',
+              fontSize: '13px', fontWeight: 600,
+              transition: 'all 0.12s', flexShrink: 0,
+              fontFamily: 'inherit',
             }}
-          >{loading ? "…" : "SEND →"}</button>
+          >
+            Send
+          </button>
         </div>
+        <p style={{ margin: '5px 0 0', fontSize: '11px', color: C.textFaint, textAlign: 'center' }}>
+          Enter to send · Shift+Enter for new line
+        </p>
       </div>
+
+      <style>{`
+        @keyframes wp-pulse {
+          0%, 80%, 100% { opacity: 0.2; transform: scale(0.75); }
+          40% { opacity: 1; transform: scale(1); }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; background: ${C.bg}; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: ${C.borderStrong}; border-radius: 4px; }
+        textarea::placeholder { color: ${C.textFaint}; }
+      `}</style>
     </div>
-  );
+  )
+}
+
+// ── Auth gate ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const { session, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div style={{
+        height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: C.bg, color: C.textFaint, fontSize: '14px',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      }}>
+        Loading…
+      </div>
+    )
+  }
+
+  return session ? <Tutor /> : <Login />
 }
